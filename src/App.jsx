@@ -1,36 +1,95 @@
 import { useState } from "react"
-import { Wallet } from "ethers"
+import { Wallet, JsonRpcProvider, formatEther } from "ethers"
+
+/**
+ * Supported networks (hardcode dulu)
+ */
+const NETWORKS = {
+  ethereum: {
+    name: "Ethereum Mainnet",
+    rpc: "https://rpc.ankr.com/eth"
+  },
+  arbitrum: {
+    name: "Arbitrum One",
+    rpc: "https://rpc.ankr.com/arbitrum"
+  }
+}
 
 export default function App() {
   const [wallet, setWallet] = useState(null)
+  const [network, setNetwork] = useState("ethereum")
+  const [balance, setBalance] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  function generateWallet() {
-    const w = Wallet.createRandom()
-    setWallet({
-      address: w.address,
-      privateKey: w.privateKey,
-      mnemonic: w.mnemonic.phrase
-    })
+  async function generateWallet() {
+    try {
+      setLoading(true)
+      setBalance(null)
+
+      const w = Wallet.createRandom()
+
+      const data = {
+        address: w.address,
+        privateKey: w.privateKey,
+        mnemonic: w.mnemonic.phrase
+      }
+
+      setWallet(data)
+
+      const provider = new JsonRpcProvider(NETWORKS[network].rpc)
+      const bal = await provider.getBalance(data.address)
+
+      setBalance(formatEther(bal))
+    } catch (err) {
+      console.error(err)
+      alert("Failed to generate wallet or load balance")
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <div style={styles.page}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Sponsor EVM Wallet Generator</h2>
+        <h2 style={styles.title}>Sponsor Wallet (Phase 1)</h2>
 
-        <button style={styles.button} onClick={generateWallet}>
-          Generate Wallet
+        {/* Network selector */}
+        <select
+          value={network}
+          onChange={(e) => setNetwork(e.target.value)}
+          style={styles.select}
+        >
+          {Object.entries(NETWORKS).map(([key, net]) => (
+            <option key={key} value={key}>
+              {net.name}
+            </option>
+          ))}
+        </select>
+
+        {/* Generate button */}
+        <button
+          style={styles.button}
+          onClick={generateWallet}
+          disabled={loading}
+        >
+          {loading ? "Generating..." : "Generate Sponsor Wallet"}
         </button>
 
+        {/* Result */}
         {wallet && (
           <div style={styles.result}>
+            <Field label="Network" value={NETWORKS[network].name} />
             <Field label="Address" value={wallet.address} />
             <Field label="Private Key" value={wallet.privateKey} />
             <Field label="Mnemonic Phrase" value={wallet.mnemonic} />
 
+            {balance !== null && (
+              <Field label="ETH Balance" value={`${balance} ETH`} />
+            )}
+
             <p style={styles.warning}>
-              ⚠️ Wallet ini hanya untuk sponsor fee.
-              Jangan simpan aset di sini.
+              ⚠️ Wallet ini hanya untuk sponsor gas.
+              Jangan simpan aset bernilai di sini.
             </p>
           </div>
         )}
@@ -39,6 +98,9 @@ export default function App() {
   )
 }
 
+/**
+ * Reusable field component
+ */
 function Field({ label, value }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -48,6 +110,9 @@ function Field({ label, value }) {
   )
 }
 
+/**
+ * Inline styles (simple & aman)
+ */
 const styles = {
   page: {
     minHeight: "100vh",
@@ -62,12 +127,18 @@ const styles = {
     padding: 24,
     borderRadius: 12,
     width: "100%",
-    maxWidth: 520,
+    maxWidth: 560,
     boxShadow: "0 0 40px rgba(0,0,0,0.6)"
   },
   title: {
     marginBottom: 16,
     textAlign: "center"
+  },
+  select: {
+    width: "100%",
+    padding: 10,
+    marginBottom: 12,
+    borderRadius: 8
   },
   button: {
     width: "100%",
@@ -100,4 +171,5 @@ const styles = {
     color: "#f87171"
   }
 }
+
 
