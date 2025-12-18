@@ -1,9 +1,6 @@
 import { useState } from "react"
 import { Wallet, JsonRpcProvider, formatEther } from "ethers"
 
-/**
- * Supported networks (hardcode dulu)
- */
 const NETWORKS = {
   ethereum: {
     name: "Ethereum Mainnet",
@@ -19,30 +16,33 @@ export default function App() {
   const [wallet, setWallet] = useState(null)
   const [network, setNetwork] = useState("ethereum")
   const [balance, setBalance] = useState(null)
+  const [balanceError, setBalanceError] = useState(false)
   const [loading, setLoading] = useState(false)
 
   async function generateWallet() {
+    setLoading(true)
+    setBalance(null)
+    setBalanceError(false)
+
+    // 1️⃣ Generate wallet (INI TIDAK BOLEH FAIL)
+    const w = Wallet.createRandom()
+
+    const data = {
+      address: w.address,
+      privateKey: w.privateKey,
+      mnemonic: w.mnemonic.phrase
+    }
+
+    setWallet(data)
+
+    // 2️⃣ Load balance (BOLEH FAIL)
     try {
-      setLoading(true)
-      setBalance(null)
-
-      const w = Wallet.createRandom()
-
-      const data = {
-        address: w.address,
-        privateKey: w.privateKey,
-        mnemonic: w.mnemonic.phrase
-      }
-
-      setWallet(data)
-
       const provider = new JsonRpcProvider(NETWORKS[network].rpc)
       const bal = await provider.getBalance(data.address)
-
       setBalance(formatEther(bal))
     } catch (err) {
-      console.error(err)
-      alert("Failed to generate wallet or load balance")
+      console.warn("Failed to load balance:", err)
+      setBalanceError(true)
     } finally {
       setLoading(false)
     }
@@ -53,7 +53,6 @@ export default function App() {
       <div style={styles.card}>
         <h2 style={styles.title}>Sponsor Wallet (Phase 1)</h2>
 
-        {/* Network selector */}
         <select
           value={network}
           onChange={(e) => setNetwork(e.target.value)}
@@ -66,7 +65,6 @@ export default function App() {
           ))}
         </select>
 
-        {/* Generate button */}
         <button
           style={styles.button}
           onClick={generateWallet}
@@ -75,7 +73,6 @@ export default function App() {
           {loading ? "Generating..." : "Generate Sponsor Wallet"}
         </button>
 
-        {/* Result */}
         {wallet && (
           <div style={styles.result}>
             <Field label="Network" value={NETWORKS[network].name} />
@@ -85,6 +82,12 @@ export default function App() {
 
             {balance !== null && (
               <Field label="ETH Balance" value={`${balance} ETH`} />
+            )}
+
+            {balanceError && (
+              <p style={styles.rpcWarning}>
+                ⚠️ Gagal load balance (RPC publik error / rate limit)
+              </p>
             )}
 
             <p style={styles.warning}>
@@ -98,9 +101,6 @@ export default function App() {
   )
 }
 
-/**
- * Reusable field component
- */
 function Field({ label, value }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -110,9 +110,6 @@ function Field({ label, value }) {
   )
 }
 
-/**
- * Inline styles (simple & aman)
- */
 const styles = {
   page: {
     minHeight: "100vh",
@@ -169,7 +166,10 @@ const styles = {
     marginTop: 16,
     fontSize: 13,
     color: "#f87171"
+  },
+  rpcWarning: {
+    marginTop: 8,
+    fontSize: 13,
+    color: "#facc15"
   }
 }
-
-
