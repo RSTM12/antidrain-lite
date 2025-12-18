@@ -8,14 +8,17 @@ import {
   isHexString
 } from "ethers"
 
+/**
+ * RPC TANPA API KEY (AMAN BUAT BELAJAR)
+ */
 const NETWORKS = {
   ethereum: {
     name: "Ethereum Mainnet",
-    rpc: "https://rpc.ankr.com/eth"
+    rpc: "https://cloudflare-eth.com"
   },
   arbitrum: {
     name: "Arbitrum One",
-    rpc: "https://rpc.ankr.com/arbitrum"
+    rpc: "https://arb1.arbitrum.io/rpc"
   }
 }
 
@@ -27,17 +30,18 @@ const ERC20_ABI = [
 export default function App() {
   const [network, setNetwork] = useState("ethereum")
 
-  // Sponsor (Phase 1)
+  // Sponsor wallet (belum dipakai buat tx)
   const [sponsorWallet, setSponsorWallet] = useState(null)
 
-  // Compromised (Phase 2)
+  // Compromised wallet
   const [compKey, setCompKey] = useState("")
   const [compAddress, setCompAddress] = useState("")
 
-  // Phase 3 inputs
+  // ERC20 transfer input
   const [token, setToken] = useState("")
   const [receiver, setReceiver] = useState("")
   const [amount, setAmount] = useState("")
+
   const [txHash, setTxHash] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
@@ -49,9 +53,11 @@ export default function App() {
 
   function validateCompromisedKey() {
     setError("")
+    setCompAddress("")
+
     try {
       if (!isHexString(compKey, 32)) {
-        throw new Error("Invalid private key")
+        throw new Error("Invalid private key format")
       }
       const w = new Wallet(compKey)
       setCompAddress(w.address)
@@ -66,9 +72,18 @@ export default function App() {
     setLoading(true)
 
     try {
-      if (!isAddress(token)) throw new Error("Invalid token address")
-      if (!isAddress(receiver)) throw new Error("Invalid receiver address")
-      if (!amount || Number(amount) <= 0) throw new Error("Invalid amount")
+      if (!isHexString(compKey, 32)) {
+        throw new Error("Invalid compromised private key")
+      }
+      if (!isAddress(token)) {
+        throw new Error("Invalid token address")
+      }
+      if (!isAddress(receiver)) {
+        throw new Error("Invalid receiver address")
+      }
+      if (!amount || Number(amount) <= 0) {
+        throw new Error("Invalid amount")
+      }
 
       const provider = new JsonRpcProvider(NETWORKS[network].rpc)
       const wallet = new Wallet(compKey, provider)
@@ -80,7 +95,7 @@ export default function App() {
       const tx = await erc20.transfer(receiver, value)
       setTxHash(tx.hash)
     } catch (e) {
-      setError(e.message)
+      setError(e.message || "Execution failed")
     } finally {
       setLoading(false)
     }
@@ -89,67 +104,83 @@ export default function App() {
   return (
     <div style={styles.page}>
       <div style={styles.card}>
-        <h2>Antidrain Lite</h2>
+        <h2>Antidrain Lite — Phase 3</h2>
 
+        {/* Network */}
         <select
           value={network}
           onChange={(e) => setNetwork(e.target.value)}
           style={styles.input}
         >
           {Object.entries(NETWORKS).map(([k, n]) => (
-            <option key={k} value={k}>{n.name}</option>
+            <option key={k} value={k}>
+              {n.name}
+            </option>
           ))}
         </select>
 
+        {/* Phase 1 */}
         <h3>Phase 1 — Sponsor Wallet</h3>
-        <button onClick={generateSponsorWallet} style={styles.button}>
+        <button onClick={generateSponsorWallet} style={styles.buttonSecondary}>
           Generate Sponsor Wallet
         </button>
-        {sponsorWallet && <p>{sponsorWallet.address}</p>}
+        {sponsorWallet && (
+          <p style={styles.mono}>{sponsorWallet.address}</p>
+        )}
 
+        {/* Phase 2 */}
         <h3>Phase 2 — Compromised Wallet</h3>
         <input
           type="password"
-          placeholder="Compromised private key"
+          placeholder="Compromised private key (0x...)"
           value={compKey}
-          onChange={(e) => setCompKey(e.target.value)}
+          onChange={(e) => setCompKey(e.target.value.trim())}
           style={styles.input}
         />
         <button onClick={validateCompromisedKey} style={styles.buttonSecondary}>
-          Validate Key
+          Validate Private Key
         </button>
-        {compAddress && <p>Derived: {compAddress}</p>}
+        {compAddress && (
+          <p style={styles.mono}>Derived: {compAddress}</p>
+        )}
 
+        {/* Phase 3 */}
         <h3>Phase 3 — ERC20 Transfer</h3>
         <input
           placeholder="Token contract address"
           value={token}
-          onChange={(e) => setToken(e.target.value)}
+          onChange={(e) => setToken(e.target.value.trim())}
           style={styles.input}
         />
         <input
           placeholder="Receiver address"
           value={receiver}
-          onChange={(e) => setReceiver(e.target.value)}
+          onChange={(e) => setReceiver(e.target.value.trim())}
           style={styles.input}
         />
         <input
-          placeholder="Amount"
+          placeholder="Amount (human readable)"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           style={styles.input}
         />
 
         <button onClick={executeTransfer} style={styles.button}>
-          {loading ? "Executing..." : "Execute Transfer"}
+          {loading ? "Executing..." : "Execute ERC20 Transfer"}
         </button>
 
-        {txHash && <p>Tx Hash: {txHash}</p>}
-        {error && <p style={{ color: "red" }}>{error}</p>}
+        {txHash && (
+          <p style={styles.success}>
+            Tx sent: <br />
+            <span style={styles.mono}>{txHash}</span>
+          </p>
+        )}
+
+        {error && <p style={styles.error}>❌ {error}</p>}
 
         <p style={styles.warning}>
-          ⚠️ Transfer langsung dari compromised wallet.
-          Belum anti-front-run.
+          ⚠️ Ini transfer langsung dari compromised wallet.
+          Belum ada proteksi frontrun / sponsor gas.
         </p>
       </div>
     </div>
@@ -170,7 +201,7 @@ const styles = {
     padding: 24,
     borderRadius: 12,
     width: "100%",
-    maxWidth: 600
+    maxWidth: 620
   },
   input: {
     width: "100%",
@@ -196,9 +227,23 @@ const styles = {
     borderRadius: 8,
     marginBottom: 8
   },
+  mono: {
+    fontFamily: "monospace",
+    fontSize: 13,
+    opacity: 0.9
+  },
   warning: {
     fontSize: 12,
     color: "#f87171",
     marginTop: 12
+  },
+  error: {
+    color: "#fb7185",
+    fontSize: 13
+  },
+  success: {
+    color: "#4ade80",
+    fontSize: 13
   }
 }
+
