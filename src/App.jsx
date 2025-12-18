@@ -1,6 +1,14 @@
 import { useState } from "react"
-import { Wallet, JsonRpcProvider, formatEther } from "ethers"
+import {
+  Wallet,
+  JsonRpcProvider,
+  formatEther,
+  isHexString
+} from "ethers"
 
+/**
+ * Supported networks
+ */
 const NETWORKS = {
   ethereum: {
     name: "Ethereum Mainnet",
@@ -13,46 +21,74 @@ const NETWORKS = {
 }
 
 export default function App() {
-  const [wallet, setWallet] = useState(null)
+  // Phase 1 state
+  const [sponsorWallet, setSponsorWallet] = useState(null)
   const [network, setNetwork] = useState("ethereum")
   const [balance, setBalance] = useState(null)
   const [balanceError, setBalanceError] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  async function generateWallet() {
+  // Phase 2 state
+  const [compKey, setCompKey] = useState("")
+  const [compWallet, setCompWallet] = useState(null)
+  const [compError, setCompError] = useState("")
+
+  /**
+   * Generate sponsor wallet
+   */
+  async function generateSponsorWallet() {
     setLoading(true)
     setBalance(null)
     setBalanceError(false)
 
-    // 1️⃣ Generate wallet (INI TIDAK BOLEH FAIL)
     const w = Wallet.createRandom()
-
     const data = {
       address: w.address,
       privateKey: w.privateKey,
       mnemonic: w.mnemonic.phrase
     }
+    setSponsorWallet(data)
 
-    setWallet(data)
-
-    // 2️⃣ Load balance (BOLEH FAIL)
     try {
       const provider = new JsonRpcProvider(NETWORKS[network].rpc)
       const bal = await provider.getBalance(data.address)
       setBalance(formatEther(bal))
-    } catch (err) {
-      console.warn("Failed to load balance:", err)
+    } catch {
       setBalanceError(true)
     } finally {
       setLoading(false)
     }
   }
 
+  /**
+   * Validate compromised private key (LOCAL ONLY)
+   */
+  function validateCompromisedKey() {
+    setCompError("")
+    setCompWallet(null)
+
+    try {
+      if (!isHexString(compKey, 32)) {
+        throw new Error("Invalid private key format")
+      }
+
+      const provider = new JsonRpcProvider(NETWORKS[network].rpc)
+      const w = new Wallet(compKey, provider)
+
+      setCompWallet({
+        address: w.address
+      })
+    } catch (err) {
+      setCompError(err.message)
+    }
+  }
+
   return (
     <div style={styles.page}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Sponsor Wallet (Phase 1)</h2>
+        <h2 style={styles.title}>Antidrain Lite</h2>
 
+        {/* Network */}
         <select
           value={network}
           onChange={(e) => setNetwork(e.target.value)}
@@ -65,42 +101,74 @@ export default function App() {
           ))}
         </select>
 
+        {/* Phase 1 */}
+        <h3 style={styles.section}>Phase 1 — Sponsor Wallet</h3>
         <button
           style={styles.button}
-          onClick={generateWallet}
+          onClick={generateSponsorWallet}
           disabled={loading}
         >
           {loading ? "Generating..." : "Generate Sponsor Wallet"}
         </button>
 
-        {wallet && (
+        {sponsorWallet && (
           <div style={styles.result}>
-            <Field label="Network" value={NETWORKS[network].name} />
-            <Field label="Address" value={wallet.address} />
-            <Field label="Private Key" value={wallet.privateKey} />
-            <Field label="Mnemonic Phrase" value={wallet.mnemonic} />
+            <Field label="Sponsor Address" value={sponsorWallet.address} />
+            <Field label="Private Key" value={sponsorWallet.privateKey} />
+            <Field label="Mnemonic Phrase" value={sponsorWallet.mnemonic} />
 
             {balance !== null && (
               <Field label="ETH Balance" value={`${balance} ETH`} />
             )}
-
             {balanceError && (
               <p style={styles.rpcWarning}>
-                ⚠️ Gagal load balance (RPC publik error / rate limit)
+                ⚠️ Gagal load balance (RPC publik error)
               </p>
             )}
+          </div>
+        )}
 
-            <p style={styles.warning}>
-              ⚠️ Wallet ini hanya untuk sponsor gas.
-              Jangan simpan aset bernilai di sini.
+        {/* Phase 2 */}
+        <h3 style={styles.section}>Phase 2 — Compromised Wallet</h3>
+
+        <input
+          type="password"
+          placeholder="Paste compromised private key (0x...)"
+          value={compKey}
+          onChange={(e) => setCompKey(e.target.value.trim())}
+          style={styles.input}
+        />
+
+        <button style={styles.buttonSecondary} onClick={validateCompromisedKey}>
+          Validate Private Key
+        </button>
+
+        {compError && <p style={styles.error}>❌ {compError}</p>}
+
+        {compWallet && (
+          <div style={styles.result}>
+            <Field
+              label="Compromised Address (Derived)"
+              value={compWallet.address}
+            />
+            <p style={styles.info}>
+              ✅ Private key valid & address derived locally
             </p>
           </div>
         )}
+
+        <p style={styles.warning}>
+          ⚠️ Private key diproses **hanya di browser**.  
+          Tidak dikirim ke server, tidak disimpan.
+        </p>
       </div>
     </div>
   )
 }
 
+/**
+ * Reusable field
+ */
 function Field({ label, value }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -110,6 +178,9 @@ function Field({ label, value }) {
   )
 }
 
+/**
+ * Styles
+ */
 const styles = {
   page: {
     minHeight: "100vh",
@@ -124,18 +195,28 @@ const styles = {
     padding: 24,
     borderRadius: 12,
     width: "100%",
-    maxWidth: 560,
+    maxWidth: 600,
     boxShadow: "0 0 40px rgba(0,0,0,0.6)"
   },
   title: {
-    marginBottom: 16,
-    textAlign: "center"
+    textAlign: "center",
+    marginBottom: 12
+  },
+  section: {
+    marginTop: 20,
+    marginBottom: 8
   },
   select: {
     width: "100%",
     padding: 10,
     marginBottom: 12,
     borderRadius: 8
+  },
+  input: {
+    width: "100%",
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 10
   },
   button: {
     width: "100%",
@@ -144,11 +225,20 @@ const styles = {
     color: "#fff",
     border: "none",
     borderRadius: 8,
-    fontSize: 16,
     cursor: "pointer"
   },
+  buttonSecondary: {
+    width: "100%",
+    padding: "10px 16px",
+    background: "#334155",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    cursor: "pointer",
+    marginBottom: 10
+  },
   result: {
-    marginTop: 20
+    marginTop: 12
   },
   label: {
     fontSize: 13,
@@ -168,8 +258,17 @@ const styles = {
     color: "#f87171"
   },
   rpcWarning: {
-    marginTop: 8,
     fontSize: 13,
     color: "#facc15"
+  },
+  error: {
+    fontSize: 13,
+    color: "#fb7185",
+    marginBottom: 6
+  },
+  info: {
+    fontSize: 13,
+    color: "#4ade80"
   }
 }
+
