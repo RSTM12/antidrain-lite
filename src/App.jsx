@@ -2,13 +2,12 @@ import { useState } from "react"
 import {
   Wallet,
   JsonRpcProvider,
-  formatEther,
+  Contract,
+  parseUnits,
+  isAddress,
   isHexString
 } from "ethers"
 
-/**
- * Supported networks
- */
 const NETWORKS = {
   ethereum: {
     name: "Ethereum Mainnet",
@@ -20,167 +19,143 @@ const NETWORKS = {
   }
 }
 
+const ERC20_ABI = [
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function decimals() view returns (uint8)"
+]
+
 export default function App() {
-  // Phase 1 state
-  const [sponsorWallet, setSponsorWallet] = useState(null)
   const [network, setNetwork] = useState("ethereum")
-  const [balance, setBalance] = useState(null)
-  const [balanceError, setBalanceError] = useState(false)
+
+  // Sponsor (Phase 1)
+  const [sponsorWallet, setSponsorWallet] = useState(null)
+
+  // Compromised (Phase 2)
+  const [compKey, setCompKey] = useState("")
+  const [compAddress, setCompAddress] = useState("")
+
+  // Phase 3 inputs
+  const [token, setToken] = useState("")
+  const [receiver, setReceiver] = useState("")
+  const [amount, setAmount] = useState("")
+  const [txHash, setTxHash] = useState("")
+  const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
-  // Phase 2 state
-  const [compKey, setCompKey] = useState("")
-  const [compWallet, setCompWallet] = useState(null)
-  const [compError, setCompError] = useState("")
-
-  /**
-   * Generate sponsor wallet
-   */
-  async function generateSponsorWallet() {
-    setLoading(true)
-    setBalance(null)
-    setBalanceError(false)
-
+  function generateSponsorWallet() {
     const w = Wallet.createRandom()
-    const data = {
-      address: w.address,
-      privateKey: w.privateKey,
-      mnemonic: w.mnemonic.phrase
-    }
-    setSponsorWallet(data)
+    setSponsorWallet(w)
+  }
 
+  function validateCompromisedKey() {
+    setError("")
     try {
-      const provider = new JsonRpcProvider(NETWORKS[network].rpc)
-      const bal = await provider.getBalance(data.address)
-      setBalance(formatEther(bal))
-    } catch {
-      setBalanceError(true)
-    } finally {
-      setLoading(false)
+      if (!isHexString(compKey, 32)) {
+        throw new Error("Invalid private key")
+      }
+      const w = new Wallet(compKey)
+      setCompAddress(w.address)
+    } catch (e) {
+      setError(e.message)
     }
   }
 
-  /**
-   * Validate compromised private key (LOCAL ONLY)
-   */
-  function validateCompromisedKey() {
-    setCompError("")
-    setCompWallet(null)
+  async function executeTransfer() {
+    setError("")
+    setTxHash("")
+    setLoading(true)
 
     try {
-      if (!isHexString(compKey, 32)) {
-        throw new Error("Invalid private key format")
-      }
+      if (!isAddress(token)) throw new Error("Invalid token address")
+      if (!isAddress(receiver)) throw new Error("Invalid receiver address")
+      if (!amount || Number(amount) <= 0) throw new Error("Invalid amount")
 
       const provider = new JsonRpcProvider(NETWORKS[network].rpc)
-      const w = new Wallet(compKey, provider)
+      const wallet = new Wallet(compKey, provider)
 
-      setCompWallet({
-        address: w.address
-      })
-    } catch (err) {
-      setCompError(err.message)
+      const erc20 = new Contract(token, ERC20_ABI, wallet)
+      const decimals = await erc20.decimals()
+      const value = parseUnits(amount, decimals)
+
+      const tx = await erc20.transfer(receiver, value)
+      setTxHash(tx.hash)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
     }
   }
 
   return (
     <div style={styles.page}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Antidrain Lite</h2>
+        <h2>Antidrain Lite</h2>
 
-        {/* Network */}
         <select
           value={network}
           onChange={(e) => setNetwork(e.target.value)}
-          style={styles.select}
+          style={styles.input}
         >
-          {Object.entries(NETWORKS).map(([key, net]) => (
-            <option key={key} value={key}>
-              {net.name}
-            </option>
+          {Object.entries(NETWORKS).map(([k, n]) => (
+            <option key={k} value={k}>{n.name}</option>
           ))}
         </select>
 
-        {/* Phase 1 */}
-        <h3 style={styles.section}>Phase 1 — Sponsor Wallet</h3>
-        <button
-          style={styles.button}
-          onClick={generateSponsorWallet}
-          disabled={loading}
-        >
-          {loading ? "Generating..." : "Generate Sponsor Wallet"}
+        <h3>Phase 1 — Sponsor Wallet</h3>
+        <button onClick={generateSponsorWallet} style={styles.button}>
+          Generate Sponsor Wallet
         </button>
+        {sponsorWallet && <p>{sponsorWallet.address}</p>}
 
-        {sponsorWallet && (
-          <div style={styles.result}>
-            <Field label="Sponsor Address" value={sponsorWallet.address} />
-            <Field label="Private Key" value={sponsorWallet.privateKey} />
-            <Field label="Mnemonic Phrase" value={sponsorWallet.mnemonic} />
-
-            {balance !== null && (
-              <Field label="ETH Balance" value={`${balance} ETH`} />
-            )}
-            {balanceError && (
-              <p style={styles.rpcWarning}>
-                ⚠️ Gagal load balance (RPC publik error)
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Phase 2 */}
-        <h3 style={styles.section}>Phase 2 — Compromised Wallet</h3>
-
+        <h3>Phase 2 — Compromised Wallet</h3>
         <input
           type="password"
-          placeholder="Paste compromised private key (0x...)"
+          placeholder="Compromised private key"
           value={compKey}
-          onChange={(e) => setCompKey(e.target.value.trim())}
+          onChange={(e) => setCompKey(e.target.value)}
+          style={styles.input}
+        />
+        <button onClick={validateCompromisedKey} style={styles.buttonSecondary}>
+          Validate Key
+        </button>
+        {compAddress && <p>Derived: {compAddress}</p>}
+
+        <h3>Phase 3 — ERC20 Transfer</h3>
+        <input
+          placeholder="Token contract address"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          style={styles.input}
+        />
+        <input
+          placeholder="Receiver address"
+          value={receiver}
+          onChange={(e) => setReceiver(e.target.value)}
+          style={styles.input}
+        />
+        <input
+          placeholder="Amount"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
           style={styles.input}
         />
 
-        <button style={styles.buttonSecondary} onClick={validateCompromisedKey}>
-          Validate Private Key
+        <button onClick={executeTransfer} style={styles.button}>
+          {loading ? "Executing..." : "Execute Transfer"}
         </button>
 
-        {compError && <p style={styles.error}>❌ {compError}</p>}
-
-        {compWallet && (
-          <div style={styles.result}>
-            <Field
-              label="Compromised Address (Derived)"
-              value={compWallet.address}
-            />
-            <p style={styles.info}>
-              ✅ Private key valid & address derived locally
-            </p>
-          </div>
-        )}
+        {txHash && <p>Tx Hash: {txHash}</p>}
+        {error && <p style={{ color: "red" }}>{error}</p>}
 
         <p style={styles.warning}>
-          ⚠️ Private key diproses **hanya di browser**.  
-          Tidak dikirim ke server, tidak disimpan.
+          ⚠️ Transfer langsung dari compromised wallet.
+          Belum anti-front-run.
         </p>
       </div>
     </div>
   )
 }
 
-/**
- * Reusable field
- */
-function Field({ label, value }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={styles.label}>{label}</div>
-      <pre style={styles.box}>{value}</pre>
-    </div>
-  )
-}
-
-/**
- * Styles
- */
 const styles = {
   page: {
     minHeight: "100vh",
@@ -188,87 +163,42 @@ const styles = {
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
-    color: "#eaeaea"
+    color: "#fff"
   },
   card: {
     background: "#131a2a",
     padding: 24,
     borderRadius: 12,
     width: "100%",
-    maxWidth: 600,
-    boxShadow: "0 0 40px rgba(0,0,0,0.6)"
-  },
-  title: {
-    textAlign: "center",
-    marginBottom: 12
-  },
-  section: {
-    marginTop: 20,
-    marginBottom: 8
-  },
-  select: {
-    width: "100%",
-    padding: 10,
-    marginBottom: 12,
-    borderRadius: 8
+    maxWidth: 600
   },
   input: {
     width: "100%",
     padding: 10,
-    borderRadius: 8,
-    marginBottom: 10
+    marginBottom: 8,
+    borderRadius: 8
   },
   button: {
     width: "100%",
-    padding: "12px 16px",
+    padding: 10,
     background: "#3b82f6",
     color: "#fff",
     border: "none",
     borderRadius: 8,
-    cursor: "pointer"
+    marginBottom: 8
   },
   buttonSecondary: {
     width: "100%",
-    padding: "10px 16px",
+    padding: 10,
     background: "#334155",
     color: "#fff",
     border: "none",
     borderRadius: 8,
-    cursor: "pointer",
-    marginBottom: 10
-  },
-  result: {
-    marginTop: 12
-  },
-  label: {
-    fontSize: 13,
-    opacity: 0.8,
-    marginBottom: 4
-  },
-  box: {
-    background: "#0b0f1a",
-    padding: 10,
-    borderRadius: 6,
-    fontSize: 13,
-    overflowX: "auto"
+    marginBottom: 8
   },
   warning: {
-    marginTop: 16,
-    fontSize: 13,
-    color: "#f87171"
-  },
-  rpcWarning: {
-    fontSize: 13,
-    color: "#facc15"
-  },
-  error: {
-    fontSize: 13,
-    color: "#fb7185",
-    marginBottom: 6
-  },
-  info: {
-    fontSize: 13,
-    color: "#4ade80"
+    fontSize: 12,
+    color: "#f87171",
+    marginTop: 12
   }
 }
-
