@@ -9,9 +9,8 @@ import {
   TypedDataEncoder
 } from "ethers"
 
-/**
- * RPC TANPA API KEY
- */
+/* ================= RPC ================= */
+
 const NETWORKS = {
   ethereum: {
     name: "Ethereum Mainnet",
@@ -25,9 +24,8 @@ const NETWORKS = {
   }
 }
 
-/**
- * ERC20 + PERMIT ABI
- */
+/* ============== ABI ==================== */
+
 const ERC20_PERMIT_ABI = [
   "function name() view returns (string)",
   "function decimals() view returns (uint8)",
@@ -36,29 +34,37 @@ const ERC20_PERMIT_ABI = [
   "function transferFrom(address,address,uint256) returns (bool)"
 ]
 
+/* ============== APP ==================== */
+
 export default function App() {
+  const [step, setStep] = useState(1)
   const [network, setNetwork] = useState("arbitrum")
 
-  // wallets
+  // sponsor
   const [sponsor, setSponsor] = useState(null)
+  const [showSponsorPK, setShowSponsorPK] = useState(false)
+
+  // compromised
   const [compKey, setCompKey] = useState("")
   const [compAddr, setCompAddr] = useState("")
 
-  // inputs
+  // rescue
   const [token, setToken] = useState("")
   const [receiver, setReceiver] = useState("")
   const [amount, setAmount] = useState("")
 
-  // state
   const [permitSupported, setPermitSupported] = useState(null)
   const [checking, setChecking] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [txHash, setTxHash] = useState("")
   const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
+
+  /* ============== LOGIC ================= */
 
   function generateSponsorWallet() {
     const w = Wallet.createRandom()
     setSponsor(w)
+    setShowSponsorPK(false)
   }
 
   function validateCompromised() {
@@ -73,24 +79,18 @@ export default function App() {
     }
   }
 
-  /**
-   * CHECK PERMIT SUPPORT
-   */
   async function checkPermitSupport() {
     setPermitSupported(null)
-    setError("")
     setChecking(true)
+    setError("")
 
     try {
       if (!isAddress(token)) throw new Error("Invalid token address")
       if (!compAddr) throw new Error("Validate compromised wallet first")
 
-      const net = NETWORKS[network]
-      const provider = new JsonRpcProvider(net.rpc)
-
+      const provider = new JsonRpcProvider(NETWORKS[network].rpc)
       const erc20 = new Contract(token, ERC20_PERMIT_ABI, provider)
 
-      // try read permit-related methods
       await erc20.name()
       await erc20.nonces(compAddr)
 
@@ -102,10 +102,7 @@ export default function App() {
     }
   }
 
-  /**
-   * EXECUTE SPONSORED PERMIT TRANSFER
-   */
-  async function executeSponsoredTransfer() {
+  async function executeRescue() {
     setLoading(true)
     setError("")
     setTxHash("")
@@ -130,7 +127,7 @@ export default function App() {
       const nonce = await erc20.nonces(compromised.address)
 
       const value = parseUnits(amount, decimals)
-      const deadline = Math.floor(Date.now() / 1000) + 300 // 5 menit
+      const deadline = Math.floor(Date.now() / 1000) + 300
 
       const domain = {
         name,
@@ -157,13 +154,11 @@ export default function App() {
         deadline
       }
 
-      // SIGN (NO GAS)
       const sig = await compromised.signTypedData(domain, types, message)
       const { v, r, s } = TypedDataEncoder.decodeSignature(sig)
 
       const erc20Sponsor = erc20.connect(sponsorSigner)
 
-      // permit
       await (await erc20Sponsor.permit(
         compromised.address,
         sponsorSigner.address,
@@ -174,7 +169,6 @@ export default function App() {
         s
       )).wait()
 
-      // transfer
       const tx = await erc20Sponsor.transferFrom(
         compromised.address,
         receiver,
@@ -189,10 +183,12 @@ export default function App() {
     }
   }
 
+  /* ============== UI ==================== */
+
   return (
     <div style={styles.page}>
       <div style={styles.card}>
-        <h2>Antidrain Lite — Permit Mode</h2>
+        <h2>Antidrain Lite (Permit Mode)</h2>
 
         <select
           value={network}
@@ -204,89 +200,119 @@ export default function App() {
           ))}
         </select>
 
-        <h3>Sponsor Wallet</h3>
-        <button onClick={generateSponsorWallet} style={styles.buttonSecondary}>
-          Generate Sponsor Wallet
-        </button>
-        {sponsor && <p style={styles.mono}>{sponsor.address}</p>}
+        {/* ========== STEP 1 ========== */}
+        {step === 1 && (
+          <>
+            <h3>Step 1 — Sponsor Wallet</h3>
 
-        <h3>Compromised Wallet</h3>
-        <input
-          type="password"
-          placeholder="Compromised private key"
-          value={compKey}
-          onChange={(e) => setCompKey(e.target.value.trim())}
-          style={styles.input}
-        />
-        <button onClick={validateCompromised} style={styles.buttonSecondary}>
-          Validate Key
-        </button>
-        {compAddr && <p style={styles.mono}>{compAddr}</p>}
+            <button onClick={generateSponsorWallet} style={styles.button}>
+              Generate Sponsor Wallet
+            </button>
 
-        <h3>Rescue Setup</h3>
-        <input
-          placeholder="Token address"
-          value={token}
-          onChange={(e) => setToken(e.target.value.trim())}
-          style={styles.input}
-        />
-        <input
-          placeholder="Receiver address"
-          value={receiver}
-          onChange={(e) => setReceiver(e.target.value.trim())}
-          style={styles.input}
-        />
-        <input
-          placeholder="Amount"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          style={styles.input}
-        />
+            {sponsor && (
+              <>
+                <p style={styles.mono}>Address: {sponsor.address}</p>
 
-        <button
-          onClick={checkPermitSupport}
-          style={styles.buttonSecondary}
-        >
-          {checking ? "Checking..." : "Check Permit Support"}
-        </button>
+                <button
+                  onClick={() => setShowSponsorPK(!showSponsorPK)}
+                  style={styles.buttonSecondary}
+                >
+                  {showSponsorPK ? "Hide" : "Show"} Private Key
+                </button>
 
-        {permitSupported === true && (
-          <p style={styles.success}>✅ Token supports PERMIT</p>
+                {showSponsorPK && (
+                  <p style={styles.mono}>{sponsor.privateKey}</p>
+                )}
+
+                <button
+                  onClick={() => setStep(2)}
+                  style={styles.button}
+                >
+                  Continue to Rescue →
+                </button>
+              </>
+            )}
+          </>
         )}
 
-        {permitSupported === false && (
-          <p style={styles.error}>
-            ❌ Token does NOT support permit  
-            <br />Rescue blocked to protect wallet
-          </p>
+        {/* ========== STEP 2 ========== */}
+        {step === 2 && (
+          <>
+            <h3>Step 2 — Compromised Wallet</h3>
+
+            <input
+              type="password"
+              placeholder="Compromised private key"
+              value={compKey}
+              onChange={(e) => setCompKey(e.target.value.trim())}
+              style={styles.input}
+            />
+            <button onClick={validateCompromised} style={styles.buttonSecondary}>
+              Validate Key
+            </button>
+
+            {compAddr && <p style={styles.mono}>{compAddr}</p>}
+
+            <h3>Rescue Setup</h3>
+
+            <input
+              placeholder="Token address"
+              value={token}
+              onChange={(e) => setToken(e.target.value.trim())}
+              style={styles.input}
+            />
+            <input
+              placeholder="Receiver address"
+              value={receiver}
+              onChange={(e) => setReceiver(e.target.value.trim())}
+              style={styles.input}
+            />
+            <input
+              placeholder="Amount"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              style={styles.input}
+            />
+
+            <button onClick={checkPermitSupport} style={styles.buttonSecondary}>
+              {checking ? "Checking..." : "Check Permit Support"}
+            </button>
+
+            {permitSupported === true && (
+              <p style={styles.success}>✅ Permit supported</p>
+            )}
+            {permitSupported === false && (
+              <p style={styles.error}>❌ No permit support — blocked</p>
+            )}
+
+            {permitSupported && (
+              <button onClick={executeRescue} style={styles.button}>
+                {loading ? "Executing..." : "Execute Sponsored Rescue"}
+              </button>
+            )}
+
+            {txHash && (
+              <p style={styles.success}>
+                Tx:<br /><span style={styles.mono}>{txHash}</span>
+              </p>
+            )}
+
+            {error && <p style={styles.error}>❌ {error}</p>}
+
+            <button
+              onClick={() => setStep(1)}
+              style={styles.buttonSecondary}
+            >
+              ← Back to Sponsor
+            </button>
+          </>
         )}
-
-        {permitSupported && (
-          <button
-            onClick={executeSponsoredTransfer}
-            style={styles.button}
-            disabled={loading}
-          >
-            {loading ? "Executing..." : "Execute Sponsored Transfer"}
-          </button>
-        )}
-
-        {txHash && (
-          <p style={styles.success}>
-            Tx:<br /><span style={styles.mono}>{txHash}</span>
-          </p>
-        )}
-
-        {error && <p style={styles.error}>❌ {error}</p>}
-
-        <p style={styles.warning}>
-          ⚠️ Fallback TX disabled by design.  
-          Tokens without permit are NOT executed.
-        </p>
       </div>
     </div>
   )
 }
+
+/* ============== STYLES ================= */
 
 const styles = {
   page: {
@@ -302,7 +328,7 @@ const styles = {
     padding: 24,
     borderRadius: 12,
     width: "100%",
-    maxWidth: 640
+    maxWidth: 650
   },
   input: {
     width: "100%",
@@ -332,17 +358,12 @@ const styles = {
     fontFamily: "monospace",
     fontSize: 13
   },
-  warning: {
-    fontSize: 12,
-    color: "#facc15",
-    marginTop: 12
+  success: {
+    color: "#4ade80",
+    fontSize: 13
   },
   error: {
     color: "#fb7185",
-    fontSize: 13
-  },
-  success: {
-    color: "#4ade80",
     fontSize: 13
   }
 }
