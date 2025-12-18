@@ -5,94 +5,182 @@ import {
   Contract,
   parseUnits,
   isAddress,
-  isHexString
+  isHexString,
+  TypedDataEncoder
 } from "ethers"
 
 /**
- * RPC TANPA API KEY (AMAN BUAT BELAJAR)
+ * RPC TANPA API KEY
  */
 const NETWORKS = {
   ethereum: {
     name: "Ethereum Mainnet",
+    chainId: 1,
     rpc: "https://cloudflare-eth.com"
   },
   arbitrum: {
     name: "Arbitrum One",
+    chainId: 42161,
     rpc: "https://arb1.arbitrum.io/rpc"
   }
 }
 
-const ERC20_ABI = [
-  "function transfer(address to, uint256 amount) returns (bool)",
-  "function decimals() view returns (uint8)"
+/**
+ * ERC20 + PERMIT ABI
+ */
+const ERC20_PERMIT_ABI = [
+  "function name() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function nonces(address) view returns (uint256)",
+  "function permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+  "function transferFrom(address,address,uint256) returns (bool)"
 ]
 
 export default function App() {
-  const [network, setNetwork] = useState("ethereum")
+  const [network, setNetwork] = useState("arbitrum")
 
-  // Sponsor wallet (belum dipakai buat tx)
-  const [sponsorWallet, setSponsorWallet] = useState(null)
-
-  // Compromised wallet
+  // wallets
+  const [sponsor, setSponsor] = useState(null)
   const [compKey, setCompKey] = useState("")
-  const [compAddress, setCompAddress] = useState("")
+  const [compAddr, setCompAddr] = useState("")
 
-  // ERC20 transfer input
+  // inputs
   const [token, setToken] = useState("")
   const [receiver, setReceiver] = useState("")
   const [amount, setAmount] = useState("")
 
+  // state
+  const [permitSupported, setPermitSupported] = useState(null)
+  const [checking, setChecking] = useState(false)
   const [txHash, setTxHash] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
   function generateSponsorWallet() {
     const w = Wallet.createRandom()
-    setSponsorWallet(w)
+    setSponsor(w)
   }
 
-  function validateCompromisedKey() {
+  function validateCompromised() {
     setError("")
-    setCompAddress("")
-
+    setCompAddr("")
     try {
-      if (!isHexString(compKey, 32)) {
-        throw new Error("Invalid private key format")
-      }
+      if (!isHexString(compKey, 32)) throw new Error("Invalid private key")
       const w = new Wallet(compKey)
-      setCompAddress(w.address)
+      setCompAddr(w.address)
     } catch (e) {
       setError(e.message)
     }
   }
 
-  async function executeTransfer() {
+  /**
+   * CHECK PERMIT SUPPORT
+   */
+  async function checkPermitSupport() {
+    setPermitSupported(null)
     setError("")
-    setTxHash("")
-    setLoading(true)
+    setChecking(true)
 
     try {
-      if (!isHexString(compKey, 32)) {
-        throw new Error("Invalid compromised private key")
-      }
-      if (!isAddress(token)) {
-        throw new Error("Invalid token address")
-      }
-      if (!isAddress(receiver)) {
-        throw new Error("Invalid receiver address")
-      }
-      if (!amount || Number(amount) <= 0) {
-        throw new Error("Invalid amount")
-      }
+      if (!isAddress(token)) throw new Error("Invalid token address")
+      if (!compAddr) throw new Error("Validate compromised wallet first")
 
-      const provider = new JsonRpcProvider(NETWORKS[network].rpc)
-      const wallet = new Wallet(compKey, provider)
+      const net = NETWORKS[network]
+      const provider = new JsonRpcProvider(net.rpc)
 
-      const erc20 = new Contract(token, ERC20_ABI, wallet)
+      const erc20 = new Contract(token, ERC20_PERMIT_ABI, provider)
+
+      // try read permit-related methods
+      await erc20.name()
+      await erc20.nonces(compAddr)
+
+      setPermitSupported(true)
+    } catch {
+      setPermitSupported(false)
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  /**
+   * EXECUTE SPONSORED PERMIT TRANSFER
+   */
+  async function executeSponsoredTransfer() {
+    setLoading(true)
+    setError("")
+    setTxHash("")
+
+    try {
+      if (!permitSupported) throw new Error("Permit not supported")
+      if (!sponsor) throw new Error("Sponsor wallet missing")
+      if (!isHexString(compKey, 32)) throw new Error("Invalid compromised key")
+      if (!isAddress(receiver)) throw new Error("Invalid receiver")
+      if (!amount || Number(amount) <= 0) throw new Error("Invalid amount")
+
+      const net = NETWORKS[network]
+      const provider = new JsonRpcProvider(net.rpc)
+
+      const compromised = new Wallet(compKey, provider)
+      const sponsorSigner = sponsor.connect(provider)
+
+      const erc20 = new Contract(token, ERC20_PERMIT_ABI, provider)
+
+      const name = await erc20.name()
       const decimals = await erc20.decimals()
-      const value = parseUnits(amount, decimals)
+      const nonce = await erc20.nonces(compromised.address)
 
-      const tx = await erc20.transfer(receiver, value)
+      const value = parseUnits(amount, decimals)
+      const deadline = Math.floor(Date.now() / 1000) + 300 // 5 menit
+
+      const domain = {
+        name,
+        version: "1",
+        chainId: net.chainId,
+        verifyingContract: token
+      }
+
+      const types = {
+        Permit: [
+          { name: "owner", type: "address" },
+          { name: "spender", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" }
+        ]
+      }
+
+      const message = {
+        owner: compromised.address,
+        spender: sponsorSigner.address,
+        value,
+        nonce,
+        deadline
+      }
+
+      // SIGN (NO GAS)
+      const sig = await compromised.signTypedData(domain, types, message)
+      const { v, r, s } = TypedDataEncoder.decodeSignature(sig)
+
+      const erc20Sponsor = erc20.connect(sponsorSigner)
+
+      // permit
+      await (await erc20Sponsor.permit(
+        compromised.address,
+        sponsorSigner.address,
+        value,
+        deadline,
+        v,
+        r,
+        s
+      )).wait()
+
+      // transfer
+      const tx = await erc20Sponsor.transferFrom(
+        compromised.address,
+        receiver,
+        value
+      )
+
       setTxHash(tx.hash)
     } catch (e) {
       setError(e.message || "Execution failed")
@@ -104,50 +192,40 @@ export default function App() {
   return (
     <div style={styles.page}>
       <div style={styles.card}>
-        <h2>Antidrain Lite — Phase 3</h2>
+        <h2>Antidrain Lite — Permit Mode</h2>
 
-        {/* Network */}
         <select
           value={network}
           onChange={(e) => setNetwork(e.target.value)}
           style={styles.input}
         >
           {Object.entries(NETWORKS).map(([k, n]) => (
-            <option key={k} value={k}>
-              {n.name}
-            </option>
+            <option key={k} value={k}>{n.name}</option>
           ))}
         </select>
 
-        {/* Phase 1 */}
-        <h3>Phase 1 — Sponsor Wallet</h3>
+        <h3>Sponsor Wallet</h3>
         <button onClick={generateSponsorWallet} style={styles.buttonSecondary}>
           Generate Sponsor Wallet
         </button>
-        {sponsorWallet && (
-          <p style={styles.mono}>{sponsorWallet.address}</p>
-        )}
+        {sponsor && <p style={styles.mono}>{sponsor.address}</p>}
 
-        {/* Phase 2 */}
-        <h3>Phase 2 — Compromised Wallet</h3>
+        <h3>Compromised Wallet</h3>
         <input
           type="password"
-          placeholder="Compromised private key (0x...)"
+          placeholder="Compromised private key"
           value={compKey}
           onChange={(e) => setCompKey(e.target.value.trim())}
           style={styles.input}
         />
-        <button onClick={validateCompromisedKey} style={styles.buttonSecondary}>
-          Validate Private Key
+        <button onClick={validateCompromised} style={styles.buttonSecondary}>
+          Validate Key
         </button>
-        {compAddress && (
-          <p style={styles.mono}>Derived: {compAddress}</p>
-        )}
+        {compAddr && <p style={styles.mono}>{compAddr}</p>}
 
-        {/* Phase 3 */}
-        <h3>Phase 3 — ERC20 Transfer</h3>
+        <h3>Rescue Setup</h3>
         <input
-          placeholder="Token contract address"
+          placeholder="Token address"
           value={token}
           onChange={(e) => setToken(e.target.value.trim())}
           style={styles.input}
@@ -159,28 +237,51 @@ export default function App() {
           style={styles.input}
         />
         <input
-          placeholder="Amount (human readable)"
+          placeholder="Amount"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           style={styles.input}
         />
 
-        <button onClick={executeTransfer} style={styles.button}>
-          {loading ? "Executing..." : "Execute ERC20 Transfer"}
+        <button
+          onClick={checkPermitSupport}
+          style={styles.buttonSecondary}
+        >
+          {checking ? "Checking..." : "Check Permit Support"}
         </button>
+
+        {permitSupported === true && (
+          <p style={styles.success}>✅ Token supports PERMIT</p>
+        )}
+
+        {permitSupported === false && (
+          <p style={styles.error}>
+            ❌ Token does NOT support permit  
+            <br />Rescue blocked to protect wallet
+          </p>
+        )}
+
+        {permitSupported && (
+          <button
+            onClick={executeSponsoredTransfer}
+            style={styles.button}
+            disabled={loading}
+          >
+            {loading ? "Executing..." : "Execute Sponsored Transfer"}
+          </button>
+        )}
 
         {txHash && (
           <p style={styles.success}>
-            Tx sent: <br />
-            <span style={styles.mono}>{txHash}</span>
+            Tx:<br /><span style={styles.mono}>{txHash}</span>
           </p>
         )}
 
         {error && <p style={styles.error}>❌ {error}</p>}
 
         <p style={styles.warning}>
-          ⚠️ Ini transfer langsung dari compromised wallet.
-          Belum ada proteksi frontrun / sponsor gas.
+          ⚠️ Fallback TX disabled by design.  
+          Tokens without permit are NOT executed.
         </p>
       </div>
     </div>
@@ -201,7 +302,7 @@ const styles = {
     padding: 24,
     borderRadius: 12,
     width: "100%",
-    maxWidth: 620
+    maxWidth: 640
   },
   input: {
     width: "100%",
@@ -229,12 +330,11 @@ const styles = {
   },
   mono: {
     fontFamily: "monospace",
-    fontSize: 13,
-    opacity: 0.9
+    fontSize: 13
   },
   warning: {
     fontSize: 12,
-    color: "#f87171",
+    color: "#facc15",
     marginTop: 12
   },
   error: {
